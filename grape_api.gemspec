@@ -21,9 +21,10 @@ Gem::Specification.new do |spec|
 
   spec.files = Dir["{app,config,db,lib}/**/*", "MIT-LICENSE", "Rakefile", "README.md"]
 
-  spec.add_dependency "rails", "~> 7.0.0"
-  spec.add_dependency "grape"
+  spec.required_ruby_version = ">= 3.2"
+  spec.add_dependency "rails", ">= 7.1", "< 9"
+  spec.add_dependency "grape", ">= 2.0", "< 3"
   spec.add_dependency "grape_on_rails_routes", "~> 0.3.2"
-  spec.add_dependency "grape-entity", "~> 0.8.0"
+  spec.add_dependency "grape-entity", ">= 1.0", "< 2"
 
 end
