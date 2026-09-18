@@ -2,12 +2,12 @@ module GrapeAPI
   module Resourceful
     module Resource
 
-      def self.included base
-        base.class_eval do
+      def self.included mod
+        mod.class_eval do
           class_attribute :resourceful_params_
           self.resourceful_params_ = {}
         end
-        base.extend ClassMethods
+        mod.extend ClassMethods
         ::Grape::Endpoint.include HelperMethods if defined? ::Grape::Endpoint
       end
 
@@ -16,6 +16,7 @@ module GrapeAPI
         def resourceful_params key=nil
           if self.resourceful_params_[self.to_s].blank?
             self.resourceful_params_[self.to_s] = {
+              executed: [],
               model_klass: nil,
               resource_identifier: nil,
               resource_finder_key: nil,
@@ -37,6 +38,10 @@ module GrapeAPI
           end
         end
 
+        def is_executed? name
+          self.resourceful_params(:executed).include?(name)
+        end
+
         def resourceful_params_merge! opts = {}
           current_opts = resourceful_params
           current_opts = current_opts.merge!(opts)
@@ -48,13 +53,20 @@ module GrapeAPI
         end
 
         def fetch_resource_and_collection!(resourceful_params = {}, &block)
-          fetch_resource! resourceful_params, &block
-          fetch_collection! resourceful_params, &block
+          fetch_resource! resourceful_params
+          fetch_collection! resourceful_params
+          unless is_executed? :fetch_resource_and_collection!
+            yield if block_given?
+            set_resource_param :executed, resourceful_params(:executed).append(:fetch_resource_and_collection!).uniq
+          end
         end
 
         def fetch_resource!(resourceful_params = {}, &block)
           resourceful_params_merge!(resourceful_params)
-          yield if block_given?
+          unless is_executed? :fetch_resource!
+            yield if block_given?
+            set_resource_param :executed, resourceful_params(:executed).append(:fetch_resource!).uniq
+          end
           context = self
           after_validation do
             unless route.settings[:skip_resource]
@@ -65,7 +77,10 @@ module GrapeAPI
 
         def fetch_collection!(resourceful_params = {}, &block)
           resourceful_params_merge!(resourceful_params)
-          yield if block_given?
+          unless is_executed? :fetch_collection!
+            yield if block_given?
+            set_resource_param :executed, resourceful_params(:executed).append(:fetch_collection!).uniq
+          end
           context = self
           after_validation do
             unless route.settings[:skip_collection]
@@ -85,28 +100,35 @@ module GrapeAPI
         end
 
         def resource_actions
-          resourceful_params[:resource_actions]
+          self.resourceful_params[:resource_actions]
         end
 
         def collection_actions
-          resourceful_params[:collection_actions]
+          self.resourceful_params[:collection_actions]
         end
 
         def model_klass(klass = nil)
-          klass = resourceful_params[:model_klass] if klass.nil?
           if klass.nil?
-            klass = self.to_s.demodulize.singularize.camelcase
+            klass = self.resourceful_params[:model_klass]
+            if klass.blank?
+              klass= self.to_s.demodulize.singularize.camelcase
+              set_resource_param :model_klass, klass
+            end
+            klass
+          else
+            set_resource_param :model_klass, klass
+            klass
           end
-          set_resource_param :model_klass, klass
-          klass
         end
 
         def model_klass_constant
           if class_exists?(model_klass)
             model_klass.constantize
           else
-            raise { ActiveRecord::RecordNotFound }
+            model_klass.constantize
           end
+        rescue
+          raise { ActiveRecord::RecordNotFound }
         end
 
         def attributes &block
@@ -120,43 +142,62 @@ module GrapeAPI
           false
         end
 
-        def query_includes(includes = nil)
-          current_params = resourceful_params
-          includes = current_params[:query_includes] if includes.nil?
-          set_resource_param(:query_includes, includes) unless includes.nil?
-          includes
+        def query_includes(includes = nil, &block)
+          if includes.nil? && !block_given?
+            resourceful_params(:includes)
+          else
+            if block_given?
+              set_resource_param(:query_includes, block)
+            else
+              set_resource_param(:query_includes, includes)
+            end
+          end
         end
 
-        def query_scope(query = nil)
-          query = resourceful_params(:query_scope) if query.nil?
-          query = model_klass_constant if query.nil?
-          set_resource_param(:query_scope, query)
-          #query.respond_to?(:call) ? query.call(model_klass_constant) : query
-          query
+        def query_scope(query = nil, &block)
+          if query.blank? && !block_given?
+            resourceful_params(:query_scope)
+          else
+            if block_given?
+              set_resource_param :query_scope, block
+            else
+              set_resource_param :query_scope, query
+            end
+          end
         end
 
-        def resource_identifier(identifier = nil)
-          if identifier.nil?
+        def resource_identifier(identifier = nil, &block)
+          if identifier.blank? && !block_given?
             identifier = resourceful_params(:resource_identifier)
-            if(identifier.nil?)
+            if identifier.blank?
               identifier = model_klass_constant.primary_key
+              set_resource_param :resource_identifier, identifier
+            end
+            identifier
+          else
+            if block_given?
+              set_resource_param(:resource_identifier, block)
+            else
               set_resource_param(:resource_identifier, identifier)
             end
-          else
-            set_resource_param(:resource_identifier, identifier)
           end
-          identifier
         end
 
-        def resource_finder_key(key = nil)
-          key = resourceful_params(:resource_finder_key) if key.nil?
-          if key.nil?
-            key = model_klass_constant.primary_key
-            set_resource_param(:resource_finder_key, key)
+        def resource_finder_key(key = nil, &block)
+          if key.blank? && !block_given?
+            key = resourceful_params(:resource_finder_key)
+            if key.nil?
+              key = model_klass_constant.primary_key
+              set_resource_param :resource_finder_key, key
+            end
+            key
           else
-            set_resource_param(:resource_finder_key, key)
+            if block_given?
+              set_resource_param(:resource_finder_key, block)
+            else
+              set_resource_param(:resource_finder_key, identifier)
+            end
           end
-          key
         end
 
         def resource_identifier_and_finder_key identifier
@@ -177,40 +218,62 @@ module GrapeAPI
           key
         end
 
-        def resource_params_attributes(*attributes)
-          if attributes.empty?
-            attributes = resourceful_params(:resource_params_attributes)
+        def resource_params_attributes(*attributes, &block)
+          if attributes.blank? && !block_given?
+            resourceful_params(:resource_params_attributes)
+          else
+            if block_given?
+              set_resource_param(:resource_params_attributes, block)
+            else
+              set_resource_param(:resource_params_attributes, attributes)
+            end
           end
-          unless attributes.empty?
-            set_resource_param(:resource_params_attributes, attributes)
-          end
-          attributes
         end
 
-        def resource_friendly?(friendly = nil)
-          friendly = resourceful_params[:resource_friendly] if friendly.nil?
-          if friendly.nil?
-            set_resource_param(:resource_friendly, false)
+        def resource_friendly?(friendly = nil, &block)
+          if friendly.blank? && !block_given?
+            friendly = self.resourceful_params[:resource_friendly]
+            if friendly.blank?
+              friendly = false
+              set_resource_param :resource_friendly, friendly
+            end
+            friendly
+          else
+            if block_given?
+              set_resource_param :resource_friendly, block
+            else
+              set_resource_param :resource_friendly, friendly
+            end
           end
-          set_resource_param(:resource_friendly, friendly)
-          friendly
         end
 
-        def got_resource_callback(proc = nil)
-          proc = resourceful_params[:got_resource_callback] if proc.nil?
-          unless proc.nil?
-            set_resource_param(:got_resource_callback, proc)
+        def got_resource_callback proc = nil, &block
+          if proc.blank? && !block_given?
+            self.resourceful_params[:got_resource_callback]
+          else
+            if block_given?
+              set_resource_param :got_resource_callback, block
+            else
+              set_resource_param :got_resource_callback, proc
+            end
           end
-          proc
         end
 
-        def should_paginate? pg = nil
-          pg = resourceful_params[:should_paginate] if pg.nil?
-          if pg.nil?
-            set_resource_param(:should_paginate, false)
+        def should_paginate? pg = nil, &block
+          if pg.blank? && !block_given?
+            pg = self.resourceful_params[:should_paginate]
+            if pg.blank?
+              pg = false
+              set_resource_param :should_paginate, pg
+            end
+            pg
+          else
+            if block_given?
+              set_resource_param :should_paginate, block
+            else
+              set_resource_param :should_paginate, pg
+            end
           end
-          set_resource_param(:should_paginate, pg)
-          pg
         end
 
       end
@@ -266,6 +329,10 @@ module GrapeAPI
           @strong_parameter_object ||= ActionController::Parameters.new(params)
         end
 
+        def permitted_attributes
+          _resource_params
+        end
+
         def _resource_params
           attributes = {}
           if(class_context)
@@ -274,12 +341,12 @@ module GrapeAPI
             if attributes.empty?
               if posts.present?
                 # attributes = params.require(class_context.resource_params_key)
-                if class_context.resource_params_attributes.empty?
+                if class_context.resource_params_attributes.blank?
                   attributes = {}
                 else
                   _resource_params_attributes_ = class_context.resource_params_attributes
-                  if _resource_params_attributes_[0].is_a?(Proc)
-                    _resource_params_attributes_ = instance_exec(&_resource_params_attributes_[0])
+                  if _resource_params_attributes_.is_a?(Proc)
+                    _resource_params_attributes_ = instance_exec(&_resource_params_attributes_)
                   end
                   attributes = posts.permit(_resource_params_attributes_)
                 end
@@ -289,21 +356,42 @@ module GrapeAPI
           attributes
         end
 
+        def _apply_query_includes query
+          unless class_context.query_includes.blank?
+            includes = class_context.query_includes
+            if includes.is_a?(Array)
+              query = query.includes(*class_context.query_includes)
+            else
+              query = query.includes(class_context.query_includes)
+            end
+          end
+          query
+        end
+
+        def build_recursive_params(recursive_key:, parameters: posts, permitted_attributes:)
+          template = { recursive_key => permitted_attributes }
+
+          nested_permit_list = template.deep_dup
+          current_node = nested_permit_list[recursive_key]
+
+          nested_count = parameters.to_s.scan(/#{recursive_key}/).count
+          (1..nested_count).each do |i|
+            new_element = template.deep_dup
+            current_node << new_element
+            current_node = new_element[recursive_key]
+          end
+          nested_permit_list
+        end
+
         def _query
           if(class_context)
             query = class_context.query_scope
             if query.respond_to?(:call)
-              query = instance_exec(model_class, &query)
+              model = _apply_query_includes(model_class)
+              query = instance_exec(model, &query)
             else
+              query = _apply_query_includes(query)
               query = query.where.not id: nil
-            end
-            unless class_context.query_includes.blank?
-              includes = class_context.query_includes
-              if includes.is_a?(Array)
-                query = query.includes(*class_context.query_includes)
-              else
-                query = query.includes(class_context.query_includes)
-              end
             end
             if(params[:order_by])
               query = query.order params[:order_by]
@@ -365,7 +453,11 @@ module GrapeAPI
           var_name = class_context do |context|
             context.model_klass.demodulize.underscore.downcase.pluralize
           end
-          @_resources = class_context.should_paginate?? paginate(_get_resources) : _get_resources
+          should_paginate = class_context.should_paginate?
+          if should_paginate.is_a?(Proc)
+            should_paginate = instance_exec(&should_paginate)
+          end
+          @_resources = should_paginate ? paginate(_get_resources) : _get_resources
           instance_variable_set("@#{var_name}", @_resources)
         end
 

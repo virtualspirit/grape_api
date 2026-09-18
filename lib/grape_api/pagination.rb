@@ -3,7 +3,7 @@ module GrapeAPI
     def self.included(base)
       Grape::Endpoint.class_eval do
         def paginate(collection)
-          per_page = GrapeAPI.pagination.config.per_page_param(params) || route_setting(:per_page)
+          per_page = GrapeAPI.pagination.config.per_page_param(params) || route_setting(:per_page) || GrapeAPI.pagination.config.per_page_count
 
           options = {
             :page     => GrapeAPI.pagination.config.page_param(params),
@@ -24,7 +24,6 @@ module GrapeAPI
           per_page = GrapeAPI.pagination.config.per_page
           page     = GrapeAPI.pagination.config.page
           include_total   = GrapeAPI.pagination.config.include_total
-
           header 'Link',          links.join(', ') unless links.empty?
           header total,    GrapeAPI::Pagination.total_from(pagy || collection).to_s if include_total
           header per_page, options[:per_page].to_s
@@ -98,10 +97,11 @@ module GrapeAPI
       private
 
       def paginate_with_pagy(collection, options)
-        if Pagy::VARS[:max_per_page] && options[:per_page] > Pagy::VARS[:max_per_page]
-          options[:per_page] = Pagy::VARS[:max_per_page]
+        default = Pagy::VERSION >= "4" ? Pagy::DEFAULT : Pagy::VARS
+        if default[:max_per_page] && options[:per_page] > default[:max_per_page]
+          options[:per_page] = default[:max_per_page]
         elsif options[:per_page] <= 0
-          options[:per_page] = Pagy::VARS[:items]
+          options[:per_page] = default[:items]
         end
 
         pagy = pagy_from(collection, options)
@@ -120,7 +120,9 @@ module GrapeAPI
         else
           count = collection.is_a?(Array) ? collection.count : collection.count(:all)
         end
-
+        if count.is_a?(Hash)
+          count = count.values.sum
+        end
         Pagy.new(count: count, items: options[:per_page], page: options[:page])
       end
 

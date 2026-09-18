@@ -1,0 +1,24 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ["3.2"]
+        rails: ["~> 7.1.0", "~> 7.2.0", "~> 8.0.0", "~> 8.1.0"]
+    runs-on: ubuntu-latest
+    env:
+      RAILS_VERSION: ${{ matrix.rails }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: false
+      - run: bundle install --jobs 4 --retry 3
+      - run: bundle exec ruby -Itest test/rails8_smoke_test.rb
